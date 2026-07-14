@@ -14,9 +14,11 @@ import {
   FileSpreadsheet,
   Layers,
   Sparkles,
-  CheckCircle2
+  CheckCircle2,
+  QrCode
 } from 'lucide-react';
 import { AuditCycle, AuditItem } from '../types';
+import { QRScanner } from './QRScanner';
 
 export const AssetAudit: React.FC = () => {
   const { 
@@ -45,6 +47,25 @@ export const AssetAudit: React.FC = () => {
   const [auditingItemId, setAuditingItemId] = useState<string | null>(null);
   const [auditingStatus, setAuditingStatus] = useState<'verified' | 'missing' | 'damaged'>('verified');
   const [verificationNotes, setVerificationNotes] = useState('');
+
+  // Scanning states
+  const [scanningItemId, setScanningItemId] = useState<string | null>(null);
+
+  const handleScanVerify = (scannedTag: string) => {
+    if (!scanningItemId) return;
+    const item = auditItems.find(i => i.id === scanningItemId);
+    if (!item) return;
+    const asset = assets.find(a => a.id === item.assetId);
+    if (!asset) return;
+
+    if (asset.assetTag === scannedTag || asset.serialNumber === scannedTag || asset.id === scannedTag) {
+      updateAuditItem(scanningItemId, 'verified', `Scanned and verified via camera QR scanner on ${new Date().toLocaleDateString()}`);
+      alert(`Success: Asset "${asset.name}" (${asset.assetTag}) verified!`);
+    } else {
+      alert(`Mismatch Error: Scanned tag "${scannedTag}" does not match asset "${asset.name}" (${asset.assetTag}).`);
+    }
+    setScanningItemId(null);
+  };
 
   if (!currentUser) return null;
 
@@ -304,6 +325,13 @@ export const AssetAudit: React.FC = () => {
                           {currentCycle.status === 'active' ? (
                             <div className="inline-flex gap-1.5">
                               <button
+                                onClick={() => setScanningItemId(item.id)}
+                                className="p-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 rounded-lg cursor-pointer"
+                                title="Scan QR to Verify"
+                              >
+                                <QrCode className="h-3.5 w-3.5" />
+                              </button>
+                              <button
                                 onClick={() => handleOpenVerifyDialog(item.id, 'verified')}
                                 className="p-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg cursor-pointer"
                                 title="Mark Verified"
@@ -456,6 +484,14 @@ export const AssetAudit: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+      {/* Camera-based QR Scanner for Audit Item Verification */}
+      {scanningItemId && (
+        <QRScanner
+          onScan={handleScanVerify}
+          onClose={() => setScanningItemId(null)}
+          purpose="Scan Asset QR to Verify Audit"
+        />
       )}
 
     </div>

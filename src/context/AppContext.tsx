@@ -29,6 +29,28 @@ import {
   INITIAL_TRANSFERS
 } from '../data/seed';
 
+// ── Firebase (optional) ──────────────────────────────────────────────────────
+import { db, auth, isFirebaseConfigured } from '../firebase';
+import {
+  collection, doc, setDoc, onSnapshot, writeBatch,
+} from 'firebase/firestore';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+} from 'firebase/auth';
+
+// Helper: write a full collection to Firestore
+const syncCollection = async (collName: string, items: any[]) => {
+  if (!db) return;
+  const batch = writeBatch(db);
+  items.forEach(item => {
+    batch.set(doc(collection(db!, collName), item.id), item);
+  });
+  await batch.commit();
+};
+
 interface AppContextType {
   departments: Department[];
   categories: AssetCategory[];
@@ -46,9 +68,10 @@ interface AppContextType {
   // Auth
   currentUser: Employee | null;
   setCurrentUser: (user: Employee | null) => void;
-  login: (email: string) => boolean;
-  signup: (name: string, email: string, departmentId: string) => boolean;
-  logout: () => void;
+  isFirebaseMode: boolean;
+  login: (email: string, password?: string) => Promise<{ success: boolean; error?: string }>;
+  signup: (name: string, email: string, departmentId: string, password?: string) => Promise<{ success: boolean; error?: string }>;
+  logout: () => Promise<void>;
   
   // Mutations
   addDepartment: (dept: Omit<Department, 'id'>) => void;
@@ -86,7 +109,7 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Load initial states or use seeds
+  // ── State initialised from localStorage (works offline / no Firebase) ────
   const [departments, setDepartments] = useState<Department[]>(() => 
     JSON.parse(localStorage.getItem('af_departments') || JSON.stringify(INITIAL_DEPARTMENTS))
   );
@@ -123,33 +146,78 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activityLogs, setActivityLogs] = useState<ActivityLog[]>(() => 
     JSON.parse(localStorage.getItem('af_activity_logs') || JSON.stringify(INITIAL_ACTIVITY_LOGS))
   );
-  
-  // Auth Session
+
+  // Auth — start with localStorage session (or seed admin for sandbox)
   const [currentUser, setCurrentUser] = useState<Employee | null>(() => {
+    if (isFirebaseConfigured) return null; // Firebase auth will resolve this
     const saved = localStorage.getItem('af_current_user');
-    return saved ? JSON.parse(saved) : INITIAL_EMPLOYEES[0]; // Defaults to Alex Rivera (Admin) for instant preview
+    return saved ? JSON.parse(saved) : INITIAL_EMPLOYEES[0];
   });
 
-  // Save changes to localStorage
-  useEffect(() => { localStorage.setItem('af_departments', JSON.stringify(departments)); }, [departments]);
-  useEffect(() => { localStorage.setItem('af_categories', JSON.stringify(categories)); }, [categories]);
-  useEffect(() => { localStorage.setItem('af_employees', JSON.stringify(employees)); }, [employees]);
-  useEffect(() => { localStorage.setItem('af_assets', JSON.stringify(assets)); }, [assets]);
-  useEffect(() => { localStorage.setItem('af_allocations', JSON.stringify(allocations)); }, [allocations]);
-  useEffect(() => { localStorage.setItem('af_bookings', JSON.stringify(bookings)); }, [bookings]);
-  useEffect(() => { localStorage.setItem('af_maintenance', JSON.stringify(maintenanceRequests)); }, [maintenanceRequests]);
-  useEffect(() => { localStorage.setItem('af_audit_cycles', JSON.stringify(auditCycles)); }, [auditCycles]);
-  useEffect(() => { localStorage.setItem('af_audit_items', JSON.stringify(auditItems)); }, [auditItems]);
-  useEffect(() => { localStorage.setItem('af_transfers', JSON.stringify(transferRequests)); }, [transferRequests]);
+  // ── Firebase: subscribe to Firestore collections (real-time) ─────────────
+  useEffect(() => {
+    if (!isFirebaseConfigured || !db) return;
+
+    const colMap: Record<string, (data: any[]) => void> = {
+      af_departments:  setDepartments,
+      af_categories:   setCategories,
+      af_employees:    setEmployees,
+      af_assets:       setAssets,
+      af_allocations:  setAllocations,
+      af_bookings:     setBookings,
+      af_maintenance:  setMaintenanceRequests,
+      af_audit_cycles: setAuditCycles,
+      af_audit_items:  setAuditItems,
+      af_transfers:    setTransferRequests,
+      af_notifications:setNotifications,
+      af_activity_logs:setActivityLogs,
+    };
+
+    const unsubs = Object.entries(colMap).map(([colName, setter]) =>
+      onSnapshot(collection(db!, colName), snap => {
+        const docs = snap.docs.map(d => d.data());
+        if (docs.length > 0) setter(docs as any);
+      })
+    );
+
+    return () => unsubs.forEach(u => u());
+  }, []);
+
+  // ── Firebase: resolve currentUser from Auth state ────────────────────────
+  useEffect(() => {
+    if (!isFirebaseConfigured || !auth) return;
+    const unsub = onAuthStateChanged(auth, async (fbUser) => {
+      if (!fbUser) { setCurrentUser(null); return; }
+      // Match Firebase UID or email to our employee list
+      const match = employees.find(e => e.email.toLowerCase() === (fbUser.email ?? '').toLowerCase());
+      setCurrentUser(match ?? null);
+    });
+    return () => unsub();
+  }, [employees]);
+
+  // ── localStorage persistence (fallback / mirror) ─────────────────────────
+  useEffect(() => { localStorage.setItem('af_departments',   JSON.stringify(departments)); },   [departments]);
+  useEffect(() => { localStorage.setItem('af_categories',    JSON.stringify(categories)); },    [categories]);
+  useEffect(() => { localStorage.setItem('af_employees',     JSON.stringify(employees)); },     [employees]);
+  useEffect(() => { localStorage.setItem('af_assets',        JSON.stringify(assets)); },        [assets]);
+  useEffect(() => { localStorage.setItem('af_allocations',   JSON.stringify(allocations)); },   [allocations]);
+  useEffect(() => { localStorage.setItem('af_bookings',      JSON.stringify(bookings)); },      [bookings]);
+  useEffect(() => { localStorage.setItem('af_maintenance',   JSON.stringify(maintenanceRequests)); }, [maintenanceRequests]);
+  useEffect(() => { localStorage.setItem('af_audit_cycles',  JSON.stringify(auditCycles)); },   [auditCycles]);
+  useEffect(() => { localStorage.setItem('af_audit_items',   JSON.stringify(auditItems)); },    [auditItems]);
+  useEffect(() => { localStorage.setItem('af_transfers',     JSON.stringify(transferRequests)); }, [transferRequests]);
   useEffect(() => { localStorage.setItem('af_notifications', JSON.stringify(notifications)); }, [notifications]);
-  useEffect(() => { localStorage.setItem('af_activity_logs', JSON.stringify(activityLogs)); }, [activityLogs]);
-  useEffect(() => { 
-    if (currentUser) {
-      localStorage.setItem('af_current_user', JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem('af_current_user');
-    }
+  useEffect(() => { localStorage.setItem('af_activity_logs', JSON.stringify(activityLogs)); },  [activityLogs]);
+  useEffect(() => {
+    if (currentUser) localStorage.setItem('af_current_user', JSON.stringify(currentUser));
+    else localStorage.removeItem('af_current_user');
   }, [currentUser]);
+
+  // ── Firestore write-through helper ────────────────────────────────────────
+  const firestoreSet = async (colName: string, item: { id: string }) => {
+    if (!isFirebaseConfigured || !db) return;
+    await setDoc(doc(collection(db, colName), item.id), item);
+  };
 
   // Helper: Log Activity
   const logActivity = (action: string, details: string, userOverride?: Employee) => {
@@ -210,41 +278,88 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     checkOverdueAllocations();
   }, []);
 
-  // --- Auth Actions ---
-  const login = (email: string): boolean => {
+  // ── Auth Actions ──────────────────────────────────────────────────────────
+  /**
+   * login(email, password?)
+   * When Firebase is configured → uses signInWithEmailAndPassword.
+   * Fallback → matches email in local employee list (sandbox/demo mode).
+   * Returns { success, error? }
+   */
+  const login = async (email: string, password?: string): Promise<{ success: boolean; error?: string }> => {
+    if (isFirebaseConfigured && auth) {
+      try {
+        await signInWithEmailAndPassword(auth, email, password ?? '');
+        // onAuthStateChanged will set currentUser
+        return { success: true };
+      } catch (err: any) {
+        const msg =
+          err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password'
+            ? 'Incorrect email or password.'
+            : err.code === 'auth/user-not-found'
+            ? 'No account found with this email.'
+            : err.code === 'auth/too-many-requests'
+            ? 'Too many attempts. Please try again later.'
+            : err.message ?? 'Login failed.';
+        return { success: false, error: msg };
+      }
+    }
+    // ── Sandbox fallback (no Firebase) ───────────────────────────────────────
     const found = employees.find(emp => emp.email.toLowerCase() === email.toLowerCase() && emp.status === 'active');
     if (found) {
       setCurrentUser(found);
-      logActivity('User Login', `Successfully logged in.`, found);
-      return true;
+      logActivity('User Login', 'Successfully logged in.', found);
+      return { success: true };
     }
-    return false;
+    return { success: false, error: 'Invalid email address or inactive account.' };
   };
 
-  const signup = (name: string, email: string, departmentId: string): boolean => {
+  /**
+   * signup(name, email, departmentId, password?)
+   * Firebase mode → createUserWithEmailAndPassword + Firestore profile doc.
+   * Fallback → adds employee to local state.
+   */
+  const signup = async (
+    name: string,
+    email: string,
+    departmentId: string,
+    password?: string,
+  ): Promise<{ success: boolean; error?: string }> => {
     const exists = employees.some(emp => emp.email.toLowerCase() === email.toLowerCase());
-    if (exists) return false;
+    if (exists) return { success: false, error: 'Email address is already registered.' };
 
     const newEmp: Employee = {
       id: `emp-${Date.now()}`,
-      name,
-      email,
-      departmentId,
-      role: 'employee', // Default is employee
-      status: 'active'
+      name, email, departmentId,
+      role: 'employee',
+      status: 'active',
     };
+
+    if (isFirebaseConfigured && auth && db) {
+      try {
+        const cred = await createUserWithEmailAndPassword(auth, email, password ?? 'password123');
+        newEmp.id = cred.user.uid; // Use Firebase UID as employee ID
+        await firestoreSet('af_employees', newEmp);
+      } catch (err: any) {
+        const msg =
+          err.code === 'auth/email-already-in-use'
+            ? 'Email address is already registered.'
+            : err.code === 'auth/weak-password'
+            ? 'Password must be at least 6 characters.'
+            : err.message ?? 'Registration failed.';
+        return { success: false, error: msg };
+      }
+    }
 
     setEmployees(prev => [...prev, newEmp]);
     setCurrentUser(newEmp);
-    logActivity('User Registration', `Registered a new employee account.`, newEmp);
+    logActivity('User Registration', 'Registered a new employee account.', newEmp);
     addNotification('all', 'New Team Member', `${name} joined the organization.`, 'info');
-    return true;
+    return { success: true };
   };
 
-  const logout = () => {
-    if (currentUser) {
-      logActivity('User Logout', `Logged out.`);
-    }
+  const logout = async () => {
+    if (currentUser) logActivity('User Logout', 'Logged out.');
+    if (isFirebaseConfigured && auth) await signOut(auth);
     setCurrentUser(null);
   };
 
@@ -708,6 +823,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       activityLogs,
       currentUser,
       setCurrentUser,
+      isFirebaseMode: isFirebaseConfigured,
       login,
       signup,
       logout,

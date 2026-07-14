@@ -24,6 +24,8 @@ import {
 } from 'lucide-react';
 import { Asset, UserRole } from '../types';
 import { parseInvoiceWithGemini } from '../utils/gemini';
+import { QRScanner } from './QRScanner';
+import { QRTag } from './QRTag';
 
 interface AssetDirectoryProps {
   showRegFormDirectly?: boolean;
@@ -162,8 +164,9 @@ export const AssetDirectory: React.FC<AssetDirectoryProps> = ({
   const [returnNotes, setReturnNotes] = useState('');
   const [returnCondition, setReturnCondition] = useState<Asset['condition']>('good');
 
-  // Simulated QR code scanner popup
+  // QR code scanner and print tags states
   const [showQRScanner, setShowQRScanner] = useState(false);
+  const [showQRTagModal, setShowQRTagModal] = useState(false);
 
   const isManagerOrAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === 'asset_manager');
 
@@ -227,9 +230,15 @@ export const AssetDirectory: React.FC<AssetDirectoryProps> = ({
     }
   };
 
-  // QR Simulator scan action
-  const simulateQRScan = (tag: string) => {
-    setSearchQuery(tag);
+  // QR scanner action
+  const handleQRScan = (tag: string) => {
+    const foundAsset = assets.find(a => a.assetTag === tag || a.id === tag || a.serialNumber === tag);
+    if (foundAsset) {
+      setSelectedAsset(foundAsset);
+      setSearchQuery('');
+    } else {
+      setSearchQuery(tag);
+    }
     setShowQRScanner(false);
   };
 
@@ -291,7 +300,7 @@ export const AssetDirectory: React.FC<AssetDirectoryProps> = ({
             className="inline-flex items-center space-x-2 px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 font-semibold text-xs rounded-lg transition-colors cursor-pointer"
           >
             <QrCode className="h-4 w-4 text-indigo-600" />
-            <span>Simulate QR Scan</span>
+            <span>Scan Asset QR</span>
           </button>
 
           {isManagerOrAdmin && !showRegForm && (
@@ -826,6 +835,14 @@ export const AssetDirectory: React.FC<AssetDirectoryProps> = ({
                   <Wrench className="h-3.5 w-3.5 text-slate-500" />
                   <span>Request Maintenance / Repair</span>
                 </button>
+
+                <button
+                  onClick={() => setShowQRTagModal(true)}
+                  className="flex items-center justify-center space-x-1.5 p-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold cursor-pointer col-span-2 mt-1 border border-indigo-100"
+                >
+                  <QrCode className="h-3.5 w-3.5 text-indigo-600 animate-pulse" />
+                  <span>Print QR Label Tag</span>
+                </button>
               </div>
 
               {/* Specs & Info */}
@@ -923,41 +940,20 @@ export const AssetDirectory: React.FC<AssetDirectoryProps> = ({
 
       </div>
 
-      {/* Simulated Scanner QR Dialog */}
+      {/* Camera-based QR Scanner */}
       {showQRScanner && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl relative border border-slate-100">
-            <h3 className="text-lg font-extrabold text-slate-900 font-sans mb-3">Simulate Scanning QR Tag</h3>
-            <p className="text-xs text-slate-500 mb-4 leading-relaxed">
-              In physical deployments, assets are identified via printed QR tags. Click on a tag below to simulate a laser scanner registering its tag code instantly:
-            </p>
-            
-            <div className="grid grid-cols-2 gap-2 mb-6">
-              {assets.map(a => (
-                <button
-                  key={a.id}
-                  onClick={() => simulateQRScan(a.assetTag)}
-                  className="flex items-center space-x-2 text-left p-2.5 border border-slate-150 hover:bg-indigo-50/50 hover:border-indigo-300 rounded-lg text-xs font-semibold text-slate-700 cursor-pointer transition-colors"
-                >
-                  <QrCode className="h-4 w-4 text-indigo-600 shrink-0" />
-                  <div>
-                    <span className="font-bold text-slate-900 font-mono">{a.assetTag}</span>
-                    <p className="text-[10px] text-slate-400 truncate w-24">{a.name}</p>
-                  </div>
-                </button>
-              ))}
-            </div>
+        <QRScanner
+          onScan={handleQRScan}
+          onClose={() => setShowQRScanner(false)}
+        />
+      )}
 
-            <div className="flex justify-end">
-              <button
-                onClick={() => setShowQRScanner(false)}
-                className="px-4 py-2 border border-slate-200 text-slate-600 font-bold text-xs rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
-              >
-                Close Simulator
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* Printable Branded QR Tag Modal */}
+      {showQRTagModal && selectedAsset && (
+        <QRTag
+          asset={selectedAsset}
+          onClose={() => setShowQRTagModal(false)}
+        />
       )}
 
       {/* Approve Return Modal popup */}
